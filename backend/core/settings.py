@@ -193,3 +193,4 @@ CELERY_BEAT_SCHEDULE = {
         'options': {'expires': 3600},
     },
 }
+STATIC_ROOT = BASE_DIR / 'staticfiles'
