@@ -1,9 +1,7 @@
 import axios from 'axios';
 
-const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-
 const client = axios.create({
-  baseURL,
+  baseURL: 'http://localhost:8000/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -75,7 +73,7 @@ client.interceptors.response.use(
 
       try {
         // Request token refresh using direct axios to avoid triggering request interceptors recursively
-        const response = await axios.post(`${baseURL}/auth/refresh/`, {
+        const response = await axios.post('http://localhost:8000/api/auth/refresh/', {
           refresh: refreshToken,
         });
 
