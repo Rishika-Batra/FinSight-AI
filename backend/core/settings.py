@@ -31,7 +31,16 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-30qeyipt7$=f^)n1!sto^
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "finsight-backend-8he4.onrender.com",
+    ".onrender.com",
+    "localhost",
+    "127.0.0.1",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://finsight-backend-8he4.onrender.com",
+]
 
 
 # Application definition
