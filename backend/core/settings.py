@@ -149,9 +149,7 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # CORS Configuration
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-]
+CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
 
 # Django REST Framework Configuration
 REST_FRAMEWORK = {
@@ -193,3 +191,4 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
