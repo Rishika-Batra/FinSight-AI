@@ -8,3 +8,4 @@ redis
 requests
 python-dotenv
 whitenoise
+gunicorn
