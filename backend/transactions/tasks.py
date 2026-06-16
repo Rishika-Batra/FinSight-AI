@@ -54,6 +54,55 @@ def classify_transaction(self, transaction_id):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
+def recompute_analytics(self, user_id):
+    """
+    Aggregates total_spent, top_category, and transaction_count for a user
+    across ALL their transactions, then upserts a UserAnalytics record.
+
+    This task is enqueued immediately after a CSV upload so the stats endpoint
+    can return fresh cached values on subsequent requests.
+    """
+    from transactions.models import Transaction, UserAnalytics
+    # pyrefly: ignore [missing-import]
+    from django.db.models import Sum, Count
+
+    try:
+        qs = Transaction.objects.filter(user_id=user_id)
+
+        # Aggregate total spent and count
+        agg = qs.aggregate(total=Sum('amount'), count=Count('id'))
+        total_spent = agg['total'] or Decimal('0')
+        transaction_count = agg['count'] or 0
+
+        # Find the top category by total spend
+        top_cat_row = (
+            qs.values('category')
+            .annotate(cat_total=Sum('amount'))
+            .order_by('-cat_total')
+            .first()
+        )
+        top_category = top_cat_row['category'] if top_cat_row else 'N/A'
+        top_category = top_category or 'N/A'  # guard against None category
+
+        UserAnalytics.objects.update_or_create(
+            user_id=user_id,
+            defaults={
+                'total_spent': total_spent,
+                'top_category': top_category,
+                'transaction_count': transaction_count,
+            },
+        )
+        logger.info(
+            f"recompute_analytics: Updated cache for user {user_id} — "
+            f"total_spent={total_spent}, top_category={top_category}, "
+            f"transaction_count={transaction_count}."
+        )
+    except Exception as exc:
+        logger.error(f"recompute_analytics: Failed for user {user_id} — {exc}", exc_info=True)
+        raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
 def run_anomaly_detection(self, user_id):
     """
     Fetches ALL transactions for a user, calls the ml_service /anomaly endpoint,

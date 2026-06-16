@@ -44,27 +44,18 @@ interface DbStats {
   top_category: string;
   anomalies_count: number;
   transaction_count: number;
+  period: string;
+  cache_hit: boolean;
 }
 
-// ─── Module-level cache (survives React navigation, reset on CSV upload) ───────
-let cachedDashboardData: {
-  transactions: Transaction[];
-  forecastSnapshot: ForecastSnapshot | null;
-  dbStats: DbStats | null;
-} | null = null;
+type PeriodKey = 'all' | '30d' | 'this_month' | 'this_year';
 
-if (typeof window !== 'undefined') {
-  window.addEventListener('csv-uploaded', () => {
-    cachedDashboardData = null;
-    console.log('[DEBUG LOG] Dashboard module-level cache cleared via csv-uploaded event.');
-  });
-}
-
-// ─── Diagnostic metrics ────────────────────────────────────────────────────────
-let renderCount = 0;
-let apiCallCount = 0;
-let invalidationCount = 0;
-let refetchCount = 0;
+const PERIOD_LABELS: Record<PeriodKey, string> = {
+  all: 'All Time',
+  '30d': 'Last 30 Days',
+  this_month: 'This Month',
+  this_year: 'This Year',
+};
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 3000;
@@ -236,16 +227,22 @@ const ForecastChart = memo(({ chartData, refreshing, navigate }: {
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  // Initialise state from module-level cache so navigation back is instant
-  const [transactions, setTransactions] = useState<Transaction[]>(
-    () => cachedDashboardData?.transactions ?? []
-  );
-  const [forecastSnapshot, setForecastSnapshot] = useState<ForecastSnapshot | null>(
-    () => cachedDashboardData?.forecastSnapshot ?? null
-  );
-  // Only show skeleton when there is NO cached data at all
-  const [loading, setLoading] = useState(() => !cachedDashboardData);
+  // ── Per-instance cache (survives React navigation within the same session) ─
+  const cacheRef = useRef<{
+    transactions: Transaction[];
+    forecastSnapshot: ForecastSnapshot | null;
+    dbStats: DbStats | null;
+  } | null>(null);
+
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [forecastSnapshot, setForecastSnapshot] = useState<ForecastSnapshot | null>(null);
+  const [dbStats, setDbStats] = useState<DbStats | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Period filter for stat cards
+  const [activePeriod, setActivePeriod] = useState<PeriodKey>('all');
+  const [statsLoading, setStatsLoading] = useState(false);
 
   // Refresh Insights state
   const [refreshing, setRefreshing] = useState(false);
@@ -254,48 +251,18 @@ export default function Dashboard() {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollAttemptsRef = useRef(0);
 
-  // Diagnostic: log every render
-  renderCount += 1;
-  console.log(`[METRICS] Dashboard render #${renderCount} | apiCalls=${apiCallCount} | invalidations=${invalidationCount} | refetches=${refetchCount}`);
-
   useEffect(() => {
     document.title = 'Financial Dashboard | FinSight AI';
   }, []);
 
   // ── Data fetching ────────────────────────────────────────────────────────────
 
-  const loadDashboardData = useCallback(async () => {
-    apiCallCount += 1;
-    console.log(`[METRICS] loadDashboardData called (apiCalls=${apiCallCount})`);
+  const loadDashboardData = useCallback(async (period: PeriodKey = 'all') => {
+    console.log(`[DEBUG LOG] loadDashboardData called, period=${period}`);
 
-    let latestDate = new Date();
-    try {
-      const latestTxRes: any = await client.get('/transactions/?page_size=1');
-      const results = latestTxRes.data?.results || latestTxRes.data;
-      if (Array.isArray(results) && results.length > 0) {
-        latestDate = new Date(results[0].date);
-      }
-    } catch (err) {
-      console.error('[API ERROR] Failed to fetch latest transaction for dashboard date anchoring:', err);
-    }
-
-    const currentYear = latestDate.getFullYear();
-    const currentMonth = latestDate.getMonth(); // 0-indexed
-
-    // First day of last month relative to latest transaction date
-    const startOfLastMonth = new Date(currentYear, currentMonth - 1, 1);
-    const formatDateStr = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-
-    const dateAfter = formatDateStr(startOfLastMonth);
+    // Fetch transactions for chart (last 90 days of actual data)
     let allTx: Transaction[] = [];
-    let nextUrl: string | null = `/transactions/?date_after=${dateAfter}&page_size=100`;
-
-    // Paginated fetch of transactions relative to latest transaction date
+    let nextUrl: string | null = '/transactions/?page_size=100';
     try {
       while (nextUrl) {
         const res: any = await client.get(nextUrl);
@@ -317,38 +284,62 @@ export default function Dashboard() {
         } else {
           nextUrl = null;
         }
+        // Cap at 500 transactions for chart rendering performance
+        if (allTx.length >= 500) break;
       }
     } catch (err) {
-      console.error('[API ERROR] Failed to fetch paginated transactions for dashboard:', err);
+      console.error('[API ERROR] Failed to fetch transactions for dashboard chart:', err);
     }
 
     const [forecastRes, statsRes] = await Promise.allSettled([
       client.get('/forecasts/latest/'),
-      client.get('/transactions/stats/'),
+      client.get(`/transactions/stats/?period=${period}`),
     ]);
 
+    // Handle new forecast response shape: { exists: bool, forecast: ... | null }
     let latestForecast: ForecastSnapshot | null = null;
     if (forecastRes.status === 'fulfilled') {
-      latestForecast = forecastRes.value.data;
-    } else if (forecastRes.reason?.response?.status !== 404) {
+      const data = forecastRes.value.data;
+      if (data?.exists === true) {
+        latestForecast = data as ForecastSnapshot;
+      }
+    } else {
       console.error('[API ERROR] Failed to load forecast:', forecastRes.reason);
     }
 
     let statsData: DbStats | null = null;
     if (statsRes.status === 'fulfilled') {
       statsData = statsRes.value.data;
-      console.log(`[DEBUG LOG] Dashboard stats: total_spent=${statsData?.total_spent}, top_category=${statsData?.top_category}, count=${statsData?.transaction_count}`);
+      console.log(
+        `[DEBUG LOG] Dashboard stats (period=${period}): total_spent=${statsData?.total_spent}, ` +
+        `top_category=${statsData?.top_category}, count=${statsData?.transaction_count}, ` +
+        `cache_hit=${statsData?.cache_hit}`
+      );
     } else {
       console.error('[API ERROR] Failed to load stats:', statsRes.reason);
     }
 
-    // Write to module-level cache
-    cachedDashboardData = { transactions: allTx, forecastSnapshot: latestForecast, dbStats: statsData };
+    // Write to instance-level cache ref
+    cacheRef.current = { transactions: allTx, forecastSnapshot: latestForecast, dbStats: statsData };
 
     return { allTx, latestForecast, statsData };
   }, []);
 
   // ── Polling ──────────────────────────────────────────────────────────────────
+
+  // ── Period filter handler ────────────────────────────────────────────────────
+  const handlePeriodChange = useCallback(async (period: PeriodKey) => {
+    setActivePeriod(period);
+    setStatsLoading(true);
+    try {
+      const res = await client.get(`/transactions/stats/?period=${period}`);
+      setDbStats(res.data);
+    } catch (err) {
+      console.error('[API ERROR] Failed to fetch stats for period:', period, err);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
@@ -361,10 +352,6 @@ export default function Dashboard() {
 
   const handleRefreshInsights = useCallback(async () => {
     if (refreshing) return;
-
-    refetchCount += 1;
-    invalidationCount += 1;
-    console.log(`[METRICS] handleRefreshInsights triggered (refetches=${refetchCount}, invalidations=${invalidationCount})`);
 
     setRefreshing(true);
     setRefreshError(null);
@@ -391,23 +378,24 @@ export default function Dashboard() {
 
       try {
         const res = await client.get('/forecasts/latest/');
-        const newSnapshot: ForecastSnapshot = res.data;
-        const isNew = snapshotIdBefore === null || newSnapshot.id !== snapshotIdBefore;
+        const data = res.data;
+        // Handle new { exists, forecast } shape
+        const newSnapshot: ForecastSnapshot | null = data?.exists ? data : null;
+        const isNew = newSnapshot && (snapshotIdBefore === null || newSnapshot.id !== snapshotIdBefore);
 
         if (isNew) {
           // Background reload — does NOT set loading=true, no skeleton flash
-          const { allTx, latestForecast } = await loadDashboardData();
+          const { allTx, latestForecast, statsData } = await loadDashboardData(activePeriod);
           setTransactions(allTx);
           setForecastSnapshot(latestForecast);
+          setDbStats(statsData);
           setRefreshSuccess(true);
           stopPolling();
           setTimeout(() => setRefreshSuccess(false), 4000);
           return;
         }
       } catch (err: any) {
-        if (err.response?.status !== 404) {
-          console.error('[POLLING ERROR]', err);
-        }
+        console.error('[POLLING ERROR]', err);
       }
 
       if (pollAttemptsRef.current >= MAX_POLL_ATTEMPTS) {
@@ -417,42 +405,17 @@ export default function Dashboard() {
         );
       }
     }, POLL_INTERVAL_MS);
-  }, [refreshing, forecastSnapshot, loadDashboardData, stopPolling]);
+  }, [refreshing, forecastSnapshot, activePeriod, loadDashboardData, stopPolling]);
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  // Runs once on mount. If cache exists, setLoading is already false so no skeleton.
-  // If cache was invalidated (CSV upload flag), clears cache and shows skeleton.
   useEffect(() => {
     const initialLoad = async () => {
-      // Check for CSV-upload invalidation signal
-      const csvUploaded = localStorage.getItem('csv_uploaded_dashboard');
-      if (csvUploaded === 'true') {
-        localStorage.removeItem('csv_uploaded_dashboard');
-        cachedDashboardData = null;
-        invalidationCount += 1;
-        console.log(`[METRICS] Cache invalidated by CSV upload (invalidations=${invalidationCount})`);
-        setLoading(true);        // show skeleton since data is stale
-        setTransactions([]);
-        setForecastSnapshot(null);
-      }
-
-      // Skip network fetch entirely if cache is still valid
-      if (cachedDashboardData) {
-        console.log('[DEBUG LOG] Dashboard loaded from cache, skipping API call.');
-        return;
-      }
-
       try {
         setError(null);
-        const { allTx, latestForecast } = await loadDashboardData();
+        const { allTx, latestForecast, statsData } = await loadDashboardData('all');
         setTransactions(allTx);
         setForecastSnapshot(latestForecast);
-
-        // Auto-start polling if CSV was just uploaded (cache was cleared above)
-        if (csvUploaded === 'true') {
-          console.log('[DEBUG LOG] Auto-triggering forecast refresh after CSV upload...');
-          handleRefreshInsights();
-        }
+        setDbStats(statsData);
       } catch (err: any) {
         console.error('[API ERROR] Dashboard initial load failed:', err);
         setError('An error occurred while loading the dashboard.');
@@ -465,20 +428,21 @@ export default function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // ✅ Empty deps — runs once on mount, no loop
 
-  // Listen for 'csv-uploaded' event to perform live updates if mounted
+  // Listen for 'csv-uploaded' event to refresh data when mounted
   useEffect(() => {
     const handleCsvUploaded = async () => {
-      console.log('[DEBUG LOG] Dashboard component received csv-uploaded event. Refreshing data...');
-      cachedDashboardData = null;
+      console.log('[DEBUG LOG] Dashboard: csv-uploaded event received. Refreshing...');
+      cacheRef.current = null;
       setLoading(true);
       setTransactions([]);
       setForecastSnapshot(null);
+      setDbStats(null);
       try {
         setError(null);
-        const { allTx, latestForecast } = await loadDashboardData();
+        const { allTx, latestForecast, statsData } = await loadDashboardData(activePeriod);
         setTransactions(allTx);
         setForecastSnapshot(latestForecast);
-        console.log('[DEBUG LOG] Auto-triggering forecast refresh after CSV upload event...');
+        setDbStats(statsData);
         handleRefreshInsights();
       } catch (err: any) {
         console.error('[API ERROR] Dashboard update failed after CSV upload event:', err);
@@ -489,10 +453,8 @@ export default function Dashboard() {
     };
 
     window.addEventListener('csv-uploaded', handleCsvUploaded);
-    return () => {
-      window.removeEventListener('csv-uploaded', handleCsvUploaded);
-    };
-  }, [loadDashboardData, handleRefreshInsights]);
+    return () => window.removeEventListener('csv-uploaded', handleCsvUploaded);
+  }, [loadDashboardData, handleRefreshInsights, activePeriod]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -503,62 +465,20 @@ export default function Dashboard() {
 
   // ── Derived data (memoised) ───────────────────────────────────────────────────
 
+  // Stats are now sourced from the API (dbStats), not derived from frontend tx list.
   const stats = useMemo(() => {
-    let targetYear = new Date().getFullYear();
-    let targetMonth = new Date().getMonth(); // 0-indexed
-
-    if (transactions.length > 0) {
-      let maxTime = 0;
-      transactions.forEach(t => {
-        if (!t.date) return;
-        const time = new Date(t.date).getTime();
-        if (time > maxTime) {
-          maxTime = time;
-          const parts = t.date.split('-');
-          if (parts.length >= 2) {
-            targetYear = parseInt(parts[0], 10);
-            targetMonth = parseInt(parts[1], 10) - 1; // 0-indexed
-          }
-        }
-      });
-    }
-
-    const thisMonthTx = transactions.filter((t) => {
-      if (!t.date) return false;
-      const parts = t.date.split('-');
-      return parseInt(parts[0], 10) === targetYear && parseInt(parts[1], 10) - 1 === targetMonth;
-    });
-
-    const totalSpentThisMonth = thisMonthTx.reduce(
-      (s, t) => s + (parseFloat(t.amount) || 0),
-      0
-    );
-    const anomaliesCount = thisMonthTx.filter((t) => t.is_anomaly).length;
-
-    const catMap = new Map<string, number>();
-    thisMonthTx.forEach((t) => {
-      const cat = t.category || 'Other';
-      catMap.set(cat, (catMap.get(cat) || 0) + (parseFloat(t.amount) || 0));
-    });
-
-    let topCategory = 'N/A';
-    let maxAmt = 0;
-    catMap.forEach((amt, cat) => {
-      if (amt > maxAmt) { maxAmt = amt; topCategory = cat; }
-    });
+    const totalSpent = dbStats?.total_spent ?? 0;
+    const topCategory = dbStats?.top_category ?? 'N/A';
+    const anomaliesCount = dbStats?.anomalies_count ?? 0;
+    const transactionCount = dbStats?.transaction_count ?? 0;
+    const periodLabel = PERIOD_LABELS[activePeriod];
 
     let predictedIn30Days = 0;
     const fp = forecastSnapshot?.forecast_data?.forecast ?? [];
     if (fp.length > 0) predictedIn30Days = fp[fp.length - 1].predicted_balance;
 
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    const targetMonthName = transactions.length > 0 ? `${monthNames[targetMonth]} ${targetYear}` : 'Most Recent Month';
-
-    return { totalSpentThisMonth, topCategory, anomaliesCount, predictedIn30Days, targetMonthName };
-  }, [transactions, forecastSnapshot]);
+    return { totalSpent, topCategory, anomaliesCount, transactionCount, predictedIn30Days, periodLabel };
+  }, [dbStats, forecastSnapshot, activePeriod]);
 
   const chartData = useMemo(() => {
     let latestDate = new Date();
@@ -655,8 +575,7 @@ export default function Dashboard() {
 
   // ── Render guards ─────────────────────────────────────────────────────────────
 
-  // Show skeleton ONLY when loading fresh with no cached data — never during background refreshes
-  if (loading && !cachedDashboardData) {
+  if (loading) {
     return (
       <div className="max-w-7xl mx-auto space-y-8 animate-pulse text-[#1A1A2E]" id="dashboard-page-loading">
         <div className="flex items-start justify-between">
@@ -780,6 +699,29 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* ── Period filter ── */}
+      <section className="flex flex-wrap items-center gap-2" id="dashboard-period-filter">
+        <span className="text-[10px] font-bold font-retro-title uppercase text-[#1A1A2E]/60 mr-1">Period:</span>
+        {(Object.keys(PERIOD_LABELS) as PeriodKey[]).map((key) => (
+          <button
+            key={key}
+            id={`period-btn-${key}`}
+            onClick={() => handlePeriodChange(key)}
+            disabled={statsLoading}
+            className={`
+              px-3 py-1.5 text-[9px] font-retro-title uppercase border-2 border-[#1A1A2E] transition-all cursor-pointer disabled:opacity-50
+              ${activePeriod === key
+                ? 'bg-[#1A1A2E] text-white shadow-none'
+                : 'bg-white text-[#1A1A2E] shadow-[2px_2px_0px_#1A1A2E] hover:bg-[#FFDE4D]/40 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none'
+              }
+            `}
+          >
+            {PERIOD_LABELS[key]}
+          </button>
+        ))}
+        {statsLoading && <span className="text-[10px] font-retro-mono text-[#1A1A2E]/50 uppercase">Updating…</span>}
+      </section>
+
       {/* ── Stat cards ── */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6" id="dashboard-stats-grid">
         <div className="bg-[#F5EBE6] border-2 border-[#1A1A2E] shadow-[4px_4px_0px_#1A1A2E] overflow-hidden flex flex-col justify-between hover:-translate-y-0.5 transition-all">
@@ -787,9 +729,9 @@ export default function Dashboard() {
             TOTAL_SPENT.TXT
           </div>
           <div className="p-6">
-            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Total Spent ({stats.targetMonthName})</span>
+            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Total Spent ({stats.periodLabel})</span>
             <h3 className="text-3xl font-bold font-retro-mono text-[#1A1A2E] mt-1">
-              {formatCurrency(stats.totalSpentThisMonth)}
+              {formatCurrency(stats.totalSpent)}
             </h3>
           </div>
         </div>
@@ -799,7 +741,7 @@ export default function Dashboard() {
             TOP_CAT.TXT
           </div>
           <div className="p-6">
-            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Top Category ({stats.targetMonthName})</span>
+            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Top Category ({stats.periodLabel})</span>
             <h3 className="text-3xl font-bold font-retro-mono text-[#1A1A2E] mt-1 truncate">
               {stats.topCategory}
             </h3>
@@ -811,7 +753,7 @@ export default function Dashboard() {
             ANOMALIES.EXE
           </div>
           <div className="p-6">
-            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Anomalies Detected ({stats.targetMonthName})</span>
+            <span className="text-[#1A1A2E]/60 text-xs font-bold uppercase font-retro-mono tracking-wider">Anomalies Detected (All Time)</span>
             <h3 className={`text-3xl font-bold font-retro-mono mt-1 ${
               stats.anomaliesCount > 0 ? 'text-[#FF7676]' : 'text-emerald-600'
             }`}>

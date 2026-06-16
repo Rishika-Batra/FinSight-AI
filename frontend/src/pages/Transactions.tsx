@@ -101,6 +101,7 @@ export default function Transactions() {
 
   // CSV upload state
   const [uploading, setUploading] = useState(false);
+  const [replaceExisting, setReplaceExisting] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Toast state
@@ -183,6 +184,7 @@ export default function Transactions() {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('replace_existing', replaceExisting ? 'true' : 'false');
 
     try {
       setUploading(true);
@@ -193,12 +195,8 @@ export default function Transactions() {
       const msg: string =
         res.data?.message ?? `Uploaded ${file.name} successfully.`;
       addToast('success', msg);
-      
-      // Store CSV upload flags for synchronization across other modules
-      localStorage.setItem('csv_uploaded_dashboard', 'true');
-      localStorage.setItem('csv_uploaded_budget', 'true');
 
-      // Dispatch event to clear module cache/trigger live refresh if other routes are mounted
+      // Dispatch event to trigger Dashboard refresh
       window.dispatchEvent(new CustomEvent('csv-uploaded'));
 
       // Refetch from page 1 so newly added rows appear immediately
@@ -274,13 +272,43 @@ export default function Transactions() {
             </h1>
           </div>
 
+        {/* Upload controls: mode toggle + button */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 self-start sm:self-auto">
+            {/* Replace / Append toggle */}
+            <div className="flex items-center border-2 border-[#1A1A2E] overflow-hidden" id="import-mode-toggle">
+              <button
+                onClick={() => setReplaceExisting(true)}
+                className={`px-3 py-2 text-[9px] font-retro-title uppercase transition-colors cursor-pointer ${
+                  replaceExisting
+                    ? 'bg-[#1A1A2E] text-white'
+                    : 'bg-white text-[#1A1A2E] hover:bg-[#FFDE4D]/30'
+                }`}
+                id="import-mode-replace"
+                title="Delete all existing transactions, then import CSV"
+              >
+                ↺ Replace
+              </button>
+              <button
+                onClick={() => setReplaceExisting(false)}
+                className={`px-3 py-2 text-[9px] font-retro-title uppercase border-l-2 border-[#1A1A2E] transition-colors cursor-pointer ${
+                  !replaceExisting
+                    ? 'bg-[#1A1A2E] text-white'
+                    : 'bg-white text-[#1A1A2E] hover:bg-[#FFDE4D]/30'
+                }`}
+                id="import-mode-append"
+                title="Keep existing transactions and append new ones (duplicates skipped)"
+              >
+                + Append
+              </button>
+            </div>
+
           {/* Upload CSV button */}
           <button
             onClick={handleUploadClick}
             disabled={uploading}
             id="upload-csv-btn"
             className={`
-              self-start sm:self-auto flex items-center gap-2 px-5 py-3 text-xs font-retro-title uppercase
+              flex items-center gap-2 px-5 py-3 text-xs font-retro-title uppercase
               border-2 border-[#1A1A2E] transition-all duration-200 whitespace-nowrap cursor-pointer
               ${uploading
                 ? 'bg-white/40 text-slate-400 cursor-not-allowed shadow-[0px_0px_0px_#1a1a2e]'
@@ -304,6 +332,7 @@ export default function Transactions() {
               </>
             )}
           </button>
+          </div>
         </header>
 
         {/* ── CSV format hint ── */}
