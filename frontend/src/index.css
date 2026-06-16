@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Outfit:wght@300;400;500;700;900&display=swap');
+
+@import "tailwindcss";
+
+body {
+  background-color: #FDF6E3;
+  background-image:
+    radial-gradient(circle at top right, rgba(255, 210, 63, 0.15), transparent 55%),
+    radial-gradient(circle at bottom left, rgba(255, 111, 181, 0.12), transparent 55%),
+    repeating-linear-gradient(0deg, rgba(255, 111, 181, 0.07) 0px, rgba(255, 111, 181, 0.07) 1px, transparent 1px, transparent 38px),
+    repeating-linear-gradient(90deg, rgba(255, 111, 181, 0.07) 0px, rgba(255, 111, 181, 0.07) 1px, transparent 1px, transparent 38px);
+  background-attachment: fixed;
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.07; transform: scale(0.95); }
+  50% { opacity: 0.22; transform: scale(1.1); }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 5s ease-in-out infinite;
+}
+
+@layer utilities {
+  .font-retro-title {
+    font-family: 'Press Start 2P', monospace;
+  }
+  .font-retro-mono {
+    font-family: 'VT323', monospace;
+  }
+  .retro-border {
+    border: 2px solid #1A1A2E;
+    border-radius: 0 !important;
+  }
+  .retro-shadow {
+    box-shadow: 4px 4px 0px #1A1A2E;
+  }
+  .retro-btn-shadow {
+    box-shadow: 3px 3px 0px #1A1A2E;
+  }
+  .retro-btn-pressed {
+    box-shadow: 0px 0px 0px #1A1A2E;
+    transform: translate(3px, 3px);
+  }
+  .retro-window-header {
+    background-color: #FFDE4D;
+    color: #1A1A2E;
+    border-bottom: 2px solid #1A1A2E;
+    padding: 6px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'VT323', monospace;
+    font-size: 1.25rem;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+  }
+  .bg-checkered {
+    background-image:
+      linear-gradient(45deg, #e5e5e5 25%, transparent 25%),
+      linear-gradient(-45deg, #e5e5e5 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #e5e5e5 75%),
+      linear-gradient(-45deg, transparent 75%, #e5e5e5 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0px;
+    background-color: #ffffff;
+  }
+}
+
+

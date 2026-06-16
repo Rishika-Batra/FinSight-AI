@@ -1,0 +1,11 @@
+.env
+db.sqlite3
+__pycache__/
+*.py[cod]
+venv/
+*.joblib
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+staticfiles/
+*.log
