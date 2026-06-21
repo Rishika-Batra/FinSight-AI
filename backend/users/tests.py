@@ -1,6 +1,10 @@
+# pyrefly: ignore [missing-import]
 from django.urls import reverse
+# pyrefly: ignore [missing-import]
 from django.contrib.auth.models import User
+# pyrefly: ignore [missing-import]
 from rest_framework import status
+# pyrefly: ignore [missing-import]
 from rest_framework.test import APITestCase
 
 class AuthTests(APITestCase):

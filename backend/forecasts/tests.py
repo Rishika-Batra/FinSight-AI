@@ -1,6 +1,10 @@
+# pyrefly: ignore [missing-import]
 from django.urls import reverse
+# pyrefly: ignore [missing-import]
 from django.contrib.auth.models import User
+# pyrefly: ignore [missing-import]
 from rest_framework import status
+# pyrefly: ignore [missing-import]
 from rest_framework.test import APITestCase
 from unittest.mock import patch
 from .models import ForecastSnapshot
@@ -68,5 +72,21 @@ class ForecastTests(APITestCase):
         """GET on /api/forecasts/generate/ returns 405 Method Not Allowed."""
         response = self.client.get(self.generate_url)
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        mock_run_anomaly.delay.assert_not_called()
+        mock_gen_forecast.delay.assert_not_called()
+
+    @patch('forecasts.views.run_anomaly_detection')
+    @patch('forecasts.views.generate_forecast')
+    @patch.dict('os.environ', {'CELERY_TASK_ALWAYS_EAGER': 'True'})
+    def test_generate_forecast_success_always_eager(self, mock_gen_forecast, mock_run_anomaly):
+        """POST /api/forecasts/generate/ runs both tasks synchronously when CELERY_TASK_ALWAYS_EAGER is True."""
+        response = self.client.post(self.generate_url)
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertIn('message', response.data)
+
+        # Verify both tasks were called directly, not via delay
+        mock_run_anomaly.assert_called_once_with(self.user.id)
+        mock_gen_forecast.assert_called_once_with(self.user.id)
         mock_run_anomaly.delay.assert_not_called()
         mock_gen_forecast.delay.assert_not_called()

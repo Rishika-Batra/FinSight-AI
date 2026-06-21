@@ -298,12 +298,13 @@ export default function Dashboard() {
 
     // Handle new forecast response shape: { exists: bool, forecast: ... | null }
     let latestForecast: ForecastSnapshot | null = null;
-    if (forecastRes.status === 'fulfilled') {
-      const data = forecastRes.value.data;
-      if (data?.exists === true) {
-        latestForecast = data as ForecastSnapshot;
-      }
-    } else {
+   if (forecastRes.status === 'fulfilled') {
+  const data = forecastRes.value.data;
+  // Support both { exists: true, ...forecast } and direct forecast object
+  if (data?.exists === true || data?.forecast_data || data?.id) {
+    latestForecast = data as ForecastSnapshot;
+  }
+} else {
       console.error('[API ERROR] Failed to load forecast:', forecastRes.reason);
     }
 

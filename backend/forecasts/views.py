@@ -49,8 +49,13 @@ class GenerateForecastView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        run_anomaly_detection.delay(request.user.id)
-        generate_forecast.delay(request.user.id)
+        import os
+        if os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'False') == 'True':
+            run_anomaly_detection(request.user.id)
+            generate_forecast(request.user.id)
+        else:
+            run_anomaly_detection.delay(request.user.id)
+            generate_forecast.delay(request.user.id)
 
         return Response(
             {
